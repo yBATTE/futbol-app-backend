@@ -433,5 +433,11 @@ export const getPlayersByTeam = async (teamId) => {
 }
 
 
+export const getPlayerById = async (id) => {
+  const player = await Player.findById(id).populate('team');
+  if (!player) throw new Error('Jugador no encontrado');
+  return player;
+};
+
 
 export default router;

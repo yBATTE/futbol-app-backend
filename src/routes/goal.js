@@ -160,10 +160,9 @@ export const createGoalForMatch = async (matchId, playerId, teamId, assistId, mi
       time: new Date().toTimeString().slice(0, 5) // formato "HH:MM"
     });
     return await goal.save();
-  }
-    catch (error) {
-        console.error('Error al crear el gol:', error);
-        throw new Error('Error al crear el gol');
+  } catch (error) {
+    console.error('Error al crear el gol:', error);
+    throw new Error('Error al crear el gol');
     }
 }
 

@@ -1,5 +1,6 @@
 import express from "express"
 import LiveMatch from "../models/LiveMatch.js"
+import { createMatchByLiveMatch } from "./matches.js"
 
 // Exportar una función que recibe io y retorna el router
 export default function createLiveMatchesRoutes(io) {
@@ -238,33 +239,44 @@ export default function createLiveMatchesRoutes(io) {
   })
 
   // POST - Finalizar partido
-  router.post("/:id/finish", async (req, res) => {
-    try {
-      const match = await LiveMatch.findByIdAndUpdate(
-        req.params.id,
-        {
-          status: "finished",
-          endTime: new Date(),
-        },
-        { new: true },
-      )
-        .populate("teamA", "name abreviation")
-        .populate("teamB", "name abreviation")
-        .populate("tournament", "name type season")
+router.post("/:id/finish", async (req, res) => {
+  try {
+    // 1️⃣ Buscar el LiveMatch antes de eliminarlo
+    const liveMatch = await LiveMatch.findById(req.params.id)
+      .populate("teamA", "name abreviation")
+      .populate("teamB", "name abreviation")
+      .populate("tournament", "name type season")
+      .populate("goals")
 
-      if (!match) {
-        return res.status(404).json({ message: "Partido no encontrado" })
-      }
-
-      // Emitir evento WebSocket
-      io.emit("matchFinished", match)
-
-      res.json(match)
-    } catch (error) {
-      console.error("Error finishing match:", error)
-      res.status(500).json({ message: error.message })
+    if (!liveMatch) {
+      return res.status(404).json({ message: "Partido no encontrado" })
     }
-  })
+
+    // 2️⃣ Crear el Match con los datos del LiveMatch
+    const createdMatch = await createMatchByLiveMatch(
+      liveMatch.teamA,
+      liveMatch.teamB,
+      liveMatch.date || liveMatch.startTime,
+      liveMatch.goals,
+      liveMatch.scoreA,
+      liveMatch.scoreB,
+      liveMatch.tournament._id
+    )
+
+    // 3️⃣ Eliminar el LiveMatch
+    await LiveMatch.findByIdAndDelete(req.params.id)
+
+    // 4️⃣ Emitir evento WebSocket del partido finalizado
+    io.emit("matchFinished", createdMatch)
+
+    // 5️⃣ Responder con el Match creado
+    res.json(createdMatch)
+  } catch (error) {
+    console.error("Error finishing match:", error)
+    res.status(500).json({ message: error.message })
+  }
+})
+
 
   // POST - Cambiar etapa del partido
   router.post("/:id/stage", async (req, res) => {

@@ -24,4 +24,30 @@ router.get('/:tournamentId/standings', async (req, res) => {
   }
 });
 
+// Función para actualizar la tabla de posiciones de un equipo en un torneo
+export const updateStanding = async (teamId, tournamentId, isWin, isDraw, goalsFor, goalsAgainst) => {
+  const standing = await TeamTournamentStanding.findOneAndUpdate(
+    { team: teamId, tournament: tournamentId },
+    {},
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  standing.matchesPlayed += 1;
+  standing.goalsFor += goalsFor;
+  standing.goalsAgainst += goalsAgainst;
+  standing.goalDifference = standing.goalsFor - standing.goalsAgainst;
+
+  if (isWin) {
+    standing.wins += 1;
+    standing.points += 3;
+  } else if (isDraw) {
+    standing.draws += 1;
+    standing.points += 1;
+  } else {
+    standing.losses += 1;
+  }
+
+  await standing.save();
+};
+
 export default router;

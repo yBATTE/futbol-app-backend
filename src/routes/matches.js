@@ -2,7 +2,8 @@ import express from 'express';
 import Match from '../models/Match.js';
 import {getTeamByAbbreviation} from './team.js';
 import { createGoalForMatch } from './goal.js';
-import { getPlayerByName, getPlayersByTeam } from './player.js';
+import { addStatsToPlayer, getPlayerById, getPlayerByName, getPlayersByTeam } from './player.js';
+import { updateStanding } from './teamTournametStanding.js';
 const router = express.Router();
 
 // Obtener todos los partidos
@@ -286,6 +287,7 @@ router.post('/', async (req, res) => {
 })
 
 
+
 export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, scoreB, tournamentId) => {
   try {
     const match = new Match({
@@ -305,17 +307,16 @@ export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, 
 
     if (Array.isArray(goals)) {
       for (const goal of goals) {
-        const player = await getPlayerByName(goal.player)
-        const assistPlayer = goal.assist ? await getPlayerByName(goal.assist) : null
+        const player = await getPlayerById(goal.player._id)
+        const assistPlayer = goal.assist ? await getPlayerById(goal.player._id) : null
 
         const createdGoal = await createGoalForMatch(
-          savedMatch._id,
+          goal.match._id,
           player._id,
-          goal.teamId,
+          goal.team._id,
           assistPlayer ? assistPlayer._id : null,
           goal.minute
         )
-
         savedMatch.goals.push(createdGoal)
 
         // Goles
@@ -350,37 +351,13 @@ export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, 
     }
 
     // 📊 Actualizar standings del torneo
-    const updateStanding = async (teamId, isWin, isDraw, goalsFor, goalsAgainst) => {
-      const standing = await TeamTournamentStanding.findOneAndUpdate(
-        { team: teamId, tournament: tournamentId },
-        {},
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      )
-
-      standing.matchesPlayed += 1
-      standing.goalsFor += goalsFor
-      standing.goalsAgainst += goalsAgainst
-      standing.goalDifference = standing.goalsFor - standing.goalsAgainst
-
-      if (isWin) {
-        standing.wins += 1
-        standing.points += 3
-      } else if (isDraw) {
-        standing.draws += 1
-        standing.points += 1
-      } else {
-        standing.losses += 1
-      }
-
-      await standing.save()
-    }
 
     const isDraw = scoreA === scoreB
     const teamAWins = scoreA > scoreB
     const teamBWins = scoreB > scoreA
 
-    await updateStanding(teamA._id, teamAWins, isDraw, scoreA, scoreB)
-    await updateStanding(teamB._id, teamBWins, isDraw, scoreB, scoreA)
+    await updateStanding(teamA._id,tournamentId, teamAWins, isDraw, scoreA, scoreB)
+    await updateStanding(teamB._id, tournamentId, teamBWins, isDraw, scoreB, scoreA)
 
     return savedMatch
   } catch (error) {
