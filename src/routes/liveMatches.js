@@ -1,6 +1,8 @@
 import express from "express"
 import LiveMatch from "../models/LiveMatch.js"
+import Goal from "../models/Goal.js"
 import { createMatchByLiveMatch } from "./matches.js"
+import { createQuickPlayer } from "./player.js"
 
 // Exportar una función que recibe io y retorna el router
 export default function createLiveMatchesRoutes(io) {
@@ -239,44 +241,43 @@ export default function createLiveMatchesRoutes(io) {
   })
 
   // POST - Finalizar partido
-router.post("/:id/finish", async (req, res) => {
-  try {
-    // 1️⃣ Buscar el LiveMatch antes de eliminarlo
-    const liveMatch = await LiveMatch.findById(req.params.id)
-      .populate("teamA", "name abreviation")
-      .populate("teamB", "name abreviation")
-      .populate("tournament", "name type season")
-      .populate("goals")
+  router.post("/:id/finish", async (req, res) => {
+    try {
+      // 1️⃣ Buscar el LiveMatch antes de eliminarlo
+      const liveMatch = await LiveMatch.findById(req.params.id)
+        .populate("teamA", "name abreviation")
+        .populate("teamB", "name abreviation")
+        .populate("tournament", "name type season")
+        .populate("goals")
 
-    if (!liveMatch) {
-      return res.status(404).json({ message: "Partido no encontrado" })
+      if (!liveMatch) {
+        return res.status(404).json({ message: "Partido no encontrado" })
+      }
+
+      // 2️⃣ Crear el Match con los datos del LiveMatch
+      const createdMatch = await createMatchByLiveMatch(
+        liveMatch.teamA,
+        liveMatch.teamB,
+        liveMatch.date || liveMatch.startTime,
+        liveMatch.goals,
+        liveMatch.scoreA,
+        liveMatch.scoreB,
+        liveMatch.tournament._id,
+      )
+
+      // 3️⃣ Eliminar el LiveMatch
+      await LiveMatch.findByIdAndDelete(req.params.id)
+
+      // 4️⃣ Emitir evento WebSocket del partido finalizado
+      io.emit("matchFinished", createdMatch)
+
+      // 5️⃣ Responder con el Match creado
+      res.json(createdMatch)
+    } catch (error) {
+      console.error("Error finishing match:", error)
+      res.status(500).json({ message: error.message })
     }
-
-    // 2️⃣ Crear el Match con los datos del LiveMatch
-    const createdMatch = await createMatchByLiveMatch(
-      liveMatch.teamA,
-      liveMatch.teamB,
-      liveMatch.date || liveMatch.startTime,
-      liveMatch.goals,
-      liveMatch.scoreA,
-      liveMatch.scoreB,
-      liveMatch.tournament._id
-    )
-
-    // 3️⃣ Eliminar el LiveMatch
-    await LiveMatch.findByIdAndDelete(req.params.id)
-
-    // 4️⃣ Emitir evento WebSocket del partido finalizado
-    io.emit("matchFinished", createdMatch)
-
-    // 5️⃣ Responder con el Match creado
-    res.json(createdMatch)
-  } catch (error) {
-    console.error("Error finishing match:", error)
-    res.status(500).json({ message: error.message })
-  }
-})
-
+  })
 
   // POST - Cambiar etapa del partido
   router.post("/:id/stage", async (req, res) => {
@@ -306,53 +307,143 @@ router.post("/:id/finish", async (req, res) => {
     }
   })
 
-  // PUT - Actualizar marcador
+  // ✅ PUT - ENDPOINT CORREGIDO PARA ACTUALIZAR SCORE
   router.put("/:id/score", async (req, res) => {
     try {
+
       const { team, delta, scorerId, assistId, scorerCustom, assistCustom } = req.body
 
+      // Validaciones básicas
+      if (!team || delta === undefined) {
+        return res.status(400).json({ message: "Faltan datos requeridos (team, delta)" })
+      }
+
+      if (!["A", "B"].includes(team)) {
+        return res.status(400).json({ message: "Team debe ser 'A' o 'B'" })
+      }
+
+      // Buscar el partido
       const match = await LiveMatch.findById(req.params.id)
+        .populate("teamA", "name abreviation")
+        .populate("teamB", "name abreviation")
+        .populate("tournament", "name")
+
       if (!match) {
         return res.status(404).json({ message: "Partido no encontrado" })
       }
 
+
       // Actualizar marcador
       if (team === "A") {
         match.scoreA += delta
-      } else if (team === "B") {
+      } else {
         match.scoreB += delta
       }
 
+
       // Si es un gol (delta positivo), registrar el gol
       if (delta > 0) {
-        const Goal = (await import("../models/Goal.js")).default
 
+        // Calcular minuto actual del partido
+        let currentMinute = 0
+        if (match.startTime) {
+          const elapsedTime = Date.now() - new Date(match.startTime).getTime()
+          const resumeOffset = match.resumeOffset || 0
+          currentMinute = Math.floor((elapsedTime - resumeOffset) / 60000)
+        }
+
+        let goalPlayerId = null
+        let assistPlayerId = null
+        const playerName = ""
+        const playerNumber = 0
+
+        // ✅ MANEJAR GOLEADOR - VERSIÓN CORREGIDA
+        if (scorerId && scorerId !== "custom") {
+          goalPlayerId = scorerId
+        } else if (scorerCustom && scorerCustom.firstName && scorerCustom.lastName) {
+          try {
+            const newPlayer = await createQuickPlayer({
+              firstName: scorerCustom.firstName.trim(),
+              lastName: scorerCustom.lastName.trim(),
+              club: scorerCustom.team,
+              number: scorerCustom.number || Math.floor(Math.random() * 900) + 100,
+              position: scorerCustom.position || "Delantero",
+            })
+            goalPlayerId = newPlayer._id
+          } catch (error) {
+            console.error("❌ Error creando goleador custom:", error)
+            // ❌ NO CONTINUAR SI NO SE PUEDE CREAR EL JUGADOR
+            return res.status(500).json({
+              message: `Error creando jugador custom: ${error.message}`,
+              details: "No se puede registrar el gol sin crear el jugador primero",
+            })
+          }
+        } else {
+          return res.status(400).json({ message: "Debe proporcionar un goleador válido" })
+        }
+
+        // ✅ MANEJAR ASISTENTE (OPCIONAL)
+        if (assistId && assistId !== "custom") {
+          assistPlayerId = assistId
+        } else if (assistCustom && assistCustom.firstName && assistCustom.lastName) {
+          try {
+            const newAssist = await createQuickPlayer({
+              firstName: assistCustom.firstName.trim(),
+              lastName: assistCustom.lastName.trim(),
+              club: assistCustom.team,
+              number: assistCustom.number || Math.floor(Math.random() * 900) + 100,
+              position: assistCustom.position || "Mediocampista",
+            })
+            assistPlayerId = newAssist._id
+          } catch (error) {
+            console.error("❌ Error creando asistente custom:", error)
+            // Continuar sin asistente si hay error
+          }
+        }
+
+        // ✅ CREAR EL GOL CON TU MODELO EXACTO - CORREGIDO
         const goalData = {
-          match: match._id,
-          team: team === "A" ? match.teamA : match.teamB,
-          minute: Math.floor((Date.now() - new Date(match.startTime).getTime()) / 60000),
+          liveMatch: match._id,
+          team: team === "A" ? match.teamA._id : match.teamB._id,
+          tournament: match.tournament._id,
+          player: goalPlayerId, // DEBE tener un ID válido
+          minute: currentMinute,
+          assist: assistPlayerId, // Puede ser null
         }
 
-        if (scorerId) {
-          goalData.player = scorerId
-        } else if (scorerCustom) {
-          goalData.playerCustom = scorerCustom
+        // Solo agregar name y number si NO hay player ID (caso excepcional)
+        if (!goalPlayerId && playerName) {
+          goalData.name = playerName
+          goalData.number = playerNumber
         }
 
-        if (assistId) {
-          goalData.assist = assistId
-        } else if (assistCustom) {
-          goalData.assistCustom = assistCustom
+
+        try {
+          const goal = new Goal(goalData)
+          const savedGoal = await goal.save()
+
+          // Agregar el ID del gol al LiveMatch
+          if (!match.goals) {
+            match.goals = []
+          }
+          match.goals.push(savedGoal._id)
+        } catch (error) {
+          console.error("❌ Error guardando gol:", error)
+          console.error("❌ Stack completo:", error.stack)
+          return res.status(500).json({
+            message: `Error guardando gol: ${error.message}`,
+            details: error.stack,
+          })
         }
-
-        const goal = new Goal(goalData)
-        await goal.save()
-
-        // Agregar el gol al array de goles del partido
-        match.goals.push(goal._id)
       }
 
-      await match.save()
+      // Guardar el partido actualizado
+      try {
+        await match.save()
+      } catch (error) {
+        console.error("❌ Error guardando partido:", error)
+        return res.status(500).json({ message: `Error guardando partido: ${error.message}` })
+      }
 
       // Retornar el partido actualizado con datos poblados
       const updatedMatch = await LiveMatch.findById(match._id)
@@ -378,27 +469,13 @@ router.post("/:id/finish", async (req, res) => {
 
       res.json(updatedMatch)
     } catch (error) {
-      console.error("Error updating score:", error)
-      res.status(500).json({ message: error.message })
-    }
-  })
-
-  // DELETE - Eliminar partido
-  router.delete("/:id", async (req, res) => {
-    try {
-      const deletedMatch = await LiveMatch.findByIdAndDelete(req.params.id)
-
-      if (!deletedMatch) {
-        return res.status(404).json({ message: "Partido no encontrado" })
-      }
-
-      // Emitir evento WebSocket
-      io.emit("matchDeleted", { matchId: req.params.id })
-
-      res.json({ message: "Partido eliminado correctamente" })
-    } catch (error) {
-      console.error("Error deleting match:", error)
-      res.status(500).json({ message: error.message })
+      console.error("❌ Error completo en PUT /score:", error)
+      console.error("❌ Stack completo:", error.stack)
+      res.status(500).json({
+        message: "Error interno del servidor",
+        error: error.message,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      })
     }
   })
 

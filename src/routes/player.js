@@ -439,5 +439,60 @@ export const getPlayerById = async (id) => {
   return player;
 };
 
+// ✅ FUNCIÓN CORREGIDA - createQuickPlayer
+// ✅ VERSIÓN SIMPLIFICADA SIN VALIDACIÓN DE EQUIPO
+export const createQuickPlayer = async ({ firstName, lastName, club, number, position = "Delantero" }) => {
 
-export default router;
+  // Validaciones básicas
+  if (!firstName || !lastName || !club) {
+    throw new Error("firstName, lastName y club son requeridos")
+  }
+
+  try {
+    // Verificar si ya existe un jugador con el mismo número en el equipo
+    if (number && number > 0) {
+      const existingPlayer = await Player.findOne({ team: club, number: number })
+      if (existingPlayer) {
+        number = Math.floor(Math.random() * 900) + 100
+      }
+    } else {
+      number = Math.floor(Math.random() * 900) + 100
+    }
+
+    // ✅ CREAR EL JUGADOR
+    const playerData = {
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      team: club,
+      number: number,
+      position: position || "Delantero",
+      goals: 0,
+      assists: 0,
+      matchesPlayed: 0,
+    }
+
+
+    const newPlayer = new Player(playerData)
+    const savedPlayer = await newPlayer.save()
+
+    return savedPlayer
+  } catch (error) {
+    console.error("❌ Error en createQuickPlayer:", error)
+    throw new Error(`Error creando jugador: ${error.message}`)
+  }
+}
+
+// Resto de endpoints...
+router.get("/lineup/:teamId", async (req, res) => {
+  try {
+    const { teamId } = req.params
+    const players = await Player.find({ team: teamId }).select("firstName lastName number position").sort({ number: 1 })
+
+    res.json(players)
+  } catch (error) {
+    console.error("❌ Error obteniendo jugadores:", error)
+    res.status(500).json({ message: error.message })
+  }
+})
+
+export default router

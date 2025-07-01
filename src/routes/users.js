@@ -46,7 +46,6 @@ router.get("/profile", authenticateToken, async (req, res) => {
     const user = await User.findOne({ auth0Id: userId })
 
     if (!user) {
-      console.log(`❌ Usuario no encontrado en la base de datos: ${userEmail}`)
       return res.status(403).json({
         message: "Usuario no autorizado. Contacta al administrador para obtener acceso.",
         isAdmin: false,

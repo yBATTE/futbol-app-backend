@@ -288,6 +288,7 @@ router.post('/', async (req, res) => {
 
 
 
+// ✅ FUNCIÓN CORREGIDA - createMatchByLiveMatch
 export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, scoreB, tournamentId) => {
   try {
     const match = new Match({
@@ -297,7 +298,7 @@ export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, 
       scoreA,
       scoreB,
       tournament: tournamentId,
-      goals: []
+      goals: [],
     })
 
     const savedMatch = await match.save()
@@ -307,26 +308,81 @@ export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, 
 
     if (Array.isArray(goals)) {
       for (const goal of goals) {
-        const player = await getPlayerById(goal.player._id)
-        const assistPlayer = goal.assist ? await getPlayerById(goal.player._id) : null
+        let player = null
+        let assistPlayer = null
 
-        const createdGoal = await createGoalForMatch(
-          goal.match._id,
-          player._id,
-          goal.team._id,
-          assistPlayer ? assistPlayer._id : null,
-          goal.minute
-        )
-        savedMatch.goals.push(createdGoal)
 
-        // Goles
-        if (!playerStats[player._id]) playerStats[player._id] = { goals: 0, assists: 0 }
-        playerStats[player._id].goals += 1
+        // ✅ MANEJAR GOLEADOR
+        if (goal.player && goal.player._id) {
+          // Jugador existente
+          try {
+            player = await getPlayerById(goal.player._id)
+          } catch (error) {
+          }
+        } else if (goal.player && goal.player.firstName && goal.player.lastName) {
+          // ✅ CREAR JUGADOR CUSTOM
+          try {
+            player = await createQuickPlayer({
+              firstName: goal.player.firstName,
+              lastName: goal.player.lastName,
+              club: goal.player.team || goal.team._id,
+              number: goal.player.number || 0,
+              position: goal.player.position || "Delantero",
+            })
+          } catch (error) {
+            console.error("❌ Error creando goleador custom:", error)
+          }
+        }
 
-        // Asistencias
-        if (assistPlayer) {
-          if (!playerStats[assistPlayer._id]) playerStats[assistPlayer._id] = { goals: 0, assists: 0 }
-          playerStats[assistPlayer._id].assists += 1
+        // ✅ MANEJAR ASISTENTE
+        if (goal.assist && goal.assist._id) {
+          // Asistente existente
+          try {
+            assistPlayer = await getPlayerById(goal.assist._id)
+          } catch (error) {
+          }
+        } else if (goal.assist && goal.assist.firstName && goal.assist.lastName) {
+          // ✅ CREAR ASISTENTE CUSTOM
+          try {
+            assistPlayer = await createQuickPlayer({
+              firstName: goal.assist.firstName,
+              lastName: goal.assist.lastName,
+              club: goal.assist.team || goal.team._id,
+              number: goal.assist.number || 0,
+              position: goal.assist.position || "Mediocampista",
+            })
+          } catch (error) {
+            console.error("❌ Error creando asistente custom:", error)
+          }
+        }
+
+        // Crear el gol solo si tenemos un jugador válido
+        if (player) {
+          try {
+            const createdGoal = await createGoalForMatch(
+              savedMatch._id, // Usar el ID del match guardado
+              player._id,
+              goal.team._id,
+              assistPlayer ? assistPlayer._id : null,
+              goal.minute || 0,
+            )
+
+            savedMatch.goals.push(createdGoal._id)
+
+            // Estadísticas de goles
+            if (!playerStats[player._id]) playerStats[player._id] = { goals: 0, assists: 0 }
+            playerStats[player._id].goals += 1
+
+            // Estadísticas de asistencias
+            if (assistPlayer) {
+              if (!playerStats[assistPlayer._id]) playerStats[assistPlayer._id] = { goals: 0, assists: 0 }
+              playerStats[assistPlayer._id].assists += 1
+            }
+
+          } catch (error) {
+            console.error("❌ Error creando gol:", error)
+          }
+        } else {
         }
       }
 
@@ -336,34 +392,45 @@ export const createMatchByLiveMatch = async (teamA, teamB, date, goals, scoreA, 
     // 🧩 Actualizar estadísticas de jugadores
     for (const playerId in playerStats) {
       const stats = playerStats[playerId]
-      await addStatsToPlayer(playerId, {
-        goals: stats.goals || 0,
-        assists: stats.assists || 0
-      })
+      try {
+        await addStatsToPlayer(playerId, {
+          goals: stats.goals || 0,
+          assists: stats.assists || 0,
+        })
+      } catch (error) {
+        console.error("❌ Error actualizando estadísticas del jugador:", error)
+      }
     }
 
     // 🏃‍♂️ Sumar partido jugado a todos los jugadores de ambos equipos
-    const playersTeamA = await getPlayersByTeam(teamA._id)
-    const playersTeamB = await getPlayersByTeam(teamB._id)
+    try {
+      const playersTeamA = await getPlayersByTeam(teamA._id)
+      const playersTeamB = await getPlayersByTeam(teamB._id)
 
-    for (const player of [...playersTeamA, ...playersTeamB]) {
-      await addStatsToPlayer(player._id, { matchesPlayed: 1 })
+      for (const player of [...playersTeamA, ...playersTeamB]) {
+        await addStatsToPlayer(player._id, { matchesPlayed: 1 })
+      }
+    } catch (error) {
+      console.error("❌ Error actualizando partidos jugados:", error)
     }
 
     // 📊 Actualizar standings del torneo
+    try {
+      const isDraw = scoreA === scoreB
+      const teamAWins = scoreA > scoreB
+      const teamBWins = scoreB > scoreA
 
-    const isDraw = scoreA === scoreB
-    const teamAWins = scoreA > scoreB
-    const teamBWins = scoreB > scoreA
-
-    await updateStanding(teamA._id,tournamentId, teamAWins, isDraw, scoreA, scoreB)
-    await updateStanding(teamB._id, tournamentId, teamBWins, isDraw, scoreB, scoreA)
+      await updateStanding(teamA._id, tournamentId, teamAWins, isDraw, scoreA, scoreB)
+      await updateStanding(teamB._id, tournamentId, teamBWins, isDraw, scoreB, scoreA)
+    } catch (error) {
+      console.error("❌ Error actualizando standings:", error)
+    }
 
     return savedMatch
   } catch (error) {
-    console.error('Error al crear el partido:', error)
-    throw new Error('Error al crear el partido')
+    console.error("❌ Error al crear el partido:", error)
+    throw new Error("Error al crear el partido")
   }
 }
 
-export default router;
+export default router
