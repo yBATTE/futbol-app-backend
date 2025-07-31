@@ -25,7 +25,10 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
 connectDB()
 
 app.use(cors({
-  origin: ['http://localhost:5173'],
+  origin: [
+    'http://localhost:5173',
+    'https://futbol-app-frontend-omega.vercel.app'
+  ],
   credentials: true
 }))
 app.use(express.json())
